@@ -12,6 +12,7 @@ This is the part of the documentation for working on the code: where things live
 | `kernel.cpp` | Threads, synchronization, memory, the display and the GE system calls |
 | `devices.cpp` | Controller, audio channels and mixing, UMD, utility dialogs, misc kernel queries |
 | `io.cpp`, `webfs.cpp` | File system; the disc is streamed over HTTP Range requests in the browser |
+| `pgd.cpp` | Decrypts PGD (DRM) files that games set up with `sceIoIoctl` |
 | `mpeg.cpp` | The movie player's ring buffer and stream bookkeeping (no decoding yet) |
 | `sas.cpp`, `atrac.cpp` | Sound effect voices and ATRAC3+ music and speech |
 | `ge.cpp` | GE display lists, vertex processing and a software rasterizer fallback |
