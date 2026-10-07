@@ -1,0 +1,501 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="icon" href="data:,">
+<title>PSP Web Recomp</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1b1b1f; --muted: #66666f;
+    --border: #dcdcd8; --accent: #2f6fde; --ok: #1f8a4c; --err: #c23b3b;
+    --ctl: rgba(0, 0, 0, 0.07); --ctl-on: rgba(47, 111, 222, 0.35); --ctl-text: #1b1b1f; --ctl-line: rgba(0, 0, 0, 0.12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121214; --panel: #1b1b1f; --text: #ececf0; --muted: #9a9aa6;
+      --border: #2c2c33; --accent: #6c9cff; --ok: #4cc27f; --err: #ff6b6b;
+      --ctl: rgba(255, 255, 255, 0.08); --ctl-on: rgba(108, 156, 255, 0.4); --ctl-text: #ececf0; --ctl-line: rgba(255, 255, 255, 0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 40px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  .screen {
+    background: #000; border-radius: 10px; overflow: hidden;
+    border: 1px solid var(--border); aspect-ratio: 480 / 272; width: 100%;
+  }
+  canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
+  .bar { display: flex; gap: 12px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+  .status { font-weight: 600; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); }
+  .meta { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .actions { margin-left: auto; display: flex; gap: 8px; }
+  .bar button, .bar select {
+    font: inherit; color: var(--text); background: var(--panel);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px;
+  }
+  .keys { color: var(--muted); font-size: 13px; margin: 0 0 12px; }
+  pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; margin: 0; height: 260px; overflow: auto;
+    font: 12px/1.4 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap;
+  }
+
+  /* On-screen controls, shown on touch devices only. */
+  .controls { display: none; }
+  body.touch { overscroll-behavior: none; }
+  body.touch main { padding: 12px 12px 24px; }
+  body.touch .keys { display: none; }
+  body.touch pre { height: 140px; }
+  body.touch .controls {
+    display: grid; grid-template-columns: 1fr 1fr; grid-template-areas: "mid mid" "left right";
+    gap: 12px 8px; align-items: end;
+    margin: 4px 0 16px; touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  }
+  .cluster { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+  .cluster.left { grid-area: left; } .cluster.right { grid-area: right; }
+  .cluster.mid { grid-area: mid; flex-direction: row; gap: 10px; justify-self: center; }
+  .ctl {
+    display: flex; align-items: center; justify-content: center; color: var(--ctl-text);
+    background: var(--ctl); border: 1px solid var(--ctl-line); font-weight: 600;
+  }
+  .ctl.on, .dpad span.on { background: var(--ctl-on); }
+  .shoulder { width: 100%; max-width: 150px; height: 40px; border-radius: 12px 12px 6px 6px; }
+  .small { padding: 0 12px; height: 30px; border-radius: 15px; font-size: 12px; font-weight: 500; }
+  .face { display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); }
+  .face .ctl { border-radius: 50%; font-size: 20px; }
+  .face .tri { grid-area: 1 / 2; } .face .sq { grid-area: 2 / 1; }
+  .face .ci { grid-area: 2 / 3; } .face .cr { grid-area: 3 / 2; }
+  .dpad {
+    position: relative; width: 120px; height: 120px; display: grid;
+    grid-template-columns: repeat(3, 40px); grid-template-rows: repeat(3, 40px);
+  }
+  .dpad span {
+    display: flex; align-items: center; justify-content: center; font-size: 14px;
+    color: var(--ctl-text); background: var(--ctl); border: 1px solid var(--ctl-line);
+  }
+  .dpad .up { grid-area: 1 / 2; border-radius: 8px 8px 0 0; } .dpad .down { grid-area: 3 / 2; border-radius: 0 0 8px 8px; }
+  .dpad .left { grid-area: 2 / 1; border-radius: 8px 0 0 8px; } .dpad .right { grid-area: 2 / 3; border-radius: 0 8px 8px 0; }
+  .dpad .hub { grid-area: 2 / 2; border-radius: 0; }
+  .stick {
+    position: relative; width: 130px; height: 130px; border-radius: 50%;
+    background: var(--ctl); border: 1px solid var(--ctl-line);
+  }
+  .knob {
+    position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px;
+    border-radius: 50%; background: var(--ctl-on); border: 1px solid var(--ctl-line);
+  }
+
+  body.touch.no-controls .controls { display: none; }
+
+  /* Immersive mode (fullscreen, or a phone held sideways): the picture fills
+     the viewport and the page around it goes away. */
+  body.immersive { background: #000; color: #fff; }
+  body.immersive main {
+    max-width: none; padding: 0; min-height: 100vh; min-height: 100dvh;
+    display: flex; flex-direction: column; justify-content: center;
+  }
+  body.immersive h1, body.immersive .sub, body.immersive .keys, body.immersive pre { display: none; }
+  body.immersive .screen {
+    border: 0; border-radius: 0; margin: 0 auto;
+    width: min(100vw, calc(100vh * 480 / 272)); width: min(100vw, calc(100dvh * 480 / 272));
+  }
+  body.immersive .bar {
+    position: fixed; top: 4px; left: 50%; transform: translateX(-50%); margin: 0; z-index: 2;
+    font-size: 12px; gap: 8px; flex-wrap: nowrap; white-space: nowrap; opacity: 0.8; text-shadow: 0 1px 2px #000;
+  }
+  body.immersive .status { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+  body.immersive .bar .meta { color: #ddd; }
+  body.immersive .actions { margin-left: 0; }
+  body.immersive .bar button, body.immersive .bar select {
+    color: #fff; background: rgba(255, 255, 255, 0.15); border-color: rgba(255, 255, 255, 0.25);
+  }
+  body.immersive .bar select option { color: #000; }
+  body.immersive .ctl, body.immersive .dpad span, body.immersive .stick {
+    --ctl: rgba(255, 255, 255, 0.14); --ctl-on: rgba(255, 255, 255, 0.45); --ctl-line: rgba(255, 255, 255, 0.3); --ctl-text: #fff;
+  }
+  @media (orientation: portrait) {
+    body.immersive main { justify-content: flex-start; padding-top: 44px; }
+    body.immersive.touch .controls { margin: 20px 12px; }
+  }
+  /* Sideways, the controls float over the edges of the picture. */
+  @media (orientation: landscape) {
+    body.immersive.touch .controls { position: fixed; inset: 0; margin: 0; display: block; pointer-events: none; z-index: 1; }
+    body.immersive.touch.no-controls .controls { display: none; }
+    body.immersive .cluster { position: absolute; top: 8px; bottom: 8px; justify-content: space-between; pointer-events: auto; opacity: 0.6; }
+    body.immersive .cluster.left { left: calc(8px + env(safe-area-inset-left)); }
+    body.immersive .cluster.right { right: calc(8px + env(safe-area-inset-right)); }
+    body.immersive .cluster.mid { top: auto; bottom: 8px; left: 50%; transform: translateX(-50%); }
+    body.immersive .shoulder { width: 120px; }
+    body.immersive .dpad { width: 105px; height: 105px; grid-template-columns: repeat(3, 35px); grid-template-rows: repeat(3, 35px); }
+    body.immersive .stick { width: 115px; height: 115px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>PSP Web Recomp</h1>
+  <p class="sub">The PSP code was translated to C++ and compiled to WebAssembly. No emulator involved.</p>
+  <div class="screen"><canvas id="canvas" width="480" height="272" oncontextmenu="event.preventDefault()"></canvas></div>
+  <div class="bar">
+    <span id="status" class="status">Loading…</span>
+    <span id="fps" class="meta"></span>
+    <span id="profile" class="meta" hidden></span>
+    <span class="actions">
+      <select id="scale" aria-label="Resolution" title="Internal resolution">
+        <option value="1">480×272</option>
+        <option value="2">960×544</option>
+        <option value="3">1440×816</option>
+        <option value="4">1920×1088</option>
+      </select>
+      <button id="sound" type="button">Mute</button>
+      <button id="controls-toggle" type="button" hidden>Hide controls</button>
+      <button id="fullscreen" type="button">Fullscreen</button>
+    </span>
+  </div>
+  <div id="touch" class="controls" aria-hidden="true">
+    <div class="cluster left">
+      <div class="ctl shoulder" data-btn="256">L</div>
+      <div class="dpad" data-dpad>
+        <span class="up" data-dir="16">▲</span><span class="left" data-dir="128">◀</span><span class="hub"></span>
+        <span class="right" data-dir="32">▶</span><span class="down" data-dir="64">▼</span>
+      </div>
+      <div class="stick" data-stick><div class="knob" id="knob"></div></div>
+    </div>
+    <div class="cluster mid">
+      <div class="ctl small" data-btn="1">Select</div>
+      <div class="ctl small" data-btn="8">Start</div>
+    </div>
+    <div class="cluster right">
+      <div class="ctl shoulder" data-btn="512">R</div>
+      <div class="face">
+        <div class="ctl tri" data-btn="4096">△</div>
+        <div class="ctl sq" data-btn="32768">□</div>
+        <div class="ctl ci" data-btn="8192">○</div>
+        <div class="ctl cr" data-btn="16384">✕</div>
+      </div>
+    </div>
+  </div>
+  <p class="keys">Controls: arrow keys for the D-pad, Z for ✕, X for ○, A for □, S for △, Q and W for L and R, Enter for Start, Shift for Select, and I/J/K/L for the analog stick. Gamepads work too. F toggles fullscreen.</p>
+  <pre id="log"></pre>
+</main>
+<script>
+  var logEl = document.getElementById('log');
+  var statusEl = document.getElementById('status');
+  // The GE runs on a thread of its own, which needs a cross-origin isolated page.
+  if (!window.crossOriginIsolated) {
+    statusEl.textContent = 'This page has to be served with the Cross-Origin-Opener-Policy and ' +
+      'Cross-Origin-Embedder-Policy headers (scripts/serve.py does this).';
+    statusEl.className = 'status err';
+  }
+  var fpsEl = document.getElementById('fps');
+  function appendLog(text) {
+    logEl.textContent += text + '\n';
+    if (logEl.textContent.length > 200000) logEl.textContent = logEl.textContent.slice(-150000);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  var frames = 0, cpuTotal = 0, stepTotal = 0, lastFps = performance.now(), image = null;
+  // Which GPU the browser draws with (software renderers make high resolutions slow).
+  (function () {
+    try {
+      var gl = document.createElement('canvas').getContext('webgl2');
+      var info = gl && gl.getExtension('WEBGL_debug_renderer_info');
+      var name = gl ? (info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) : 'no WebGL2';
+      appendLog('[page] WebGL renderer: ' + name);
+      fpsEl.title = 'Renderer: ' + name;
+    } catch (e) {}
+  })();
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    // ?profile: per-frame timing breakdown in the log (see README).
+    preRun: /[?&]profile\b/.test(location.search) ? [function () { ENV.PSPWEB_FRAME_PROFILE = '1'; }] : [],
+    print: function (text) { console.log(text); appendLog(text); },
+    printErr: function (text) { console.warn(text); appendLog(text); },
+    setStatus: function (text) { if (text) statusEl.textContent = text; },
+    pspStatus: function (text) {
+      var running = text === 'running';
+      statusEl.textContent = running ? 'Running' : 'Stopped: ' + text;
+      statusEl.className = 'status ' + (running || text === 'exit' ? 'ok' : 'err');
+    },
+    pspPresent: function (pixels, width, height) {
+      var ctx = Module.canvas.getContext('2d');
+      if (!image) image = ctx.createImageData(width, height);
+      image.data.set(pixels);
+      ctx.putImageData(image, 0, 0);
+      Module.pspFrame(0);
+    },
+    // FPS, and how long the game itself kept the CPU busy per frame: when that
+    // stays well under 16 ms but the frame rate drops, the GPU or the
+    // browser's compositor is the bottleneck.
+    pspProfile: function (text) {
+      var el = document.getElementById('profile');
+      el.hidden = false;
+      el.textContent = text;
+    },
+    pspFrame: function (cpuMs, steps) {
+      frames++;
+      cpuTotal += cpuMs || 0;
+      stepTotal += steps || 1;
+      var now = performance.now();
+      if (now - lastFps >= 1000) {
+        // CPU time per game frame: above ~16 ms the browser can no longer keep 60.
+        fpsEl.textContent = Math.round(frames * 1000 / (now - lastFps)) + ' FPS' +
+          (cpuTotal > 0 ? ' · CPU ' + (cpuTotal / stepTotal).toFixed(1) + ' ms' : '');
+        frames = 0; cpuTotal = 0; stepTotal = 0; lastFps = now;
+      }
+    }
+  };
+  // Keyboard and gamepad -> PSP pad (SceCtrlData button bits).
+  var KEYS = { ArrowUp: 0x10, ArrowRight: 0x20, ArrowDown: 0x40, ArrowLeft: 0x80, KeyZ: 0x4000, KeyX: 0x2000,
+               KeyA: 0x8000, KeyS: 0x1000, KeyQ: 0x100, KeyW: 0x200, Enter: 0x8, ShiftLeft: 0x1, ShiftRight: 0x1 };
+  var STICK = { KeyJ: [-1, 0], KeyL: [1, 0], KeyI: [0, -1], KeyK: [0, 1] };
+  var held = {};
+  function onKey(e, down) {
+    if (!(e.code in KEYS) && !(e.code in STICK)) return;
+    held[e.code] = down; e.preventDefault();
+  }
+  window.addEventListener('keydown', function (e) { onKey(e, true); });
+  window.addEventListener('keyup', function (e) { onKey(e, false); });
+
+  // Touch controls. Each finger is tied to the stick or the D-pad if it lands
+  // there; any other finger presses whatever button it is over, so sliding
+  // from one button to the next works.
+  var touchRoot = document.getElementById('touch'), knob = document.getElementById('knob');
+  var touchPad = { buttons: 0, x: 0, y: 0, stick: false };
+  var fingers = {};
+  if (matchMedia('(pointer: coarse)').matches || /[?&]touch\b/.test(location.search)) document.body.classList.add('touch');
+  function circleOf(el) {
+    var r = el.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: r.width / 2 };
+  }
+  function onTouch(e) {
+    e.preventDefault();
+    var seen = {}, buttons = 0, sx = 0, sy = 0, stick = false;
+    for (var i = 0; i < e.touches.length; i++) {
+      var t = e.touches[i];
+      seen[t.identifier] = true;
+      var f = fingers[t.identifier];
+      if (!f) {
+        var start = document.elementFromPoint(t.clientX, t.clientY);
+        var region = start && start.closest('[data-stick],[data-dpad]');
+        f = fingers[t.identifier] = region ? { kind: region.hasAttribute('data-stick') ? 'stick' : 'dpad', el: region } : { kind: 'button' };
+      }
+      if (f.kind === 'stick') {
+        var c = circleOf(f.el), dx = (t.clientX - c.x) / c.r, dy = (t.clientY - c.y) / c.r, len = Math.hypot(dx, dy);
+        if (len > 1) { dx /= len; dy /= len; }
+        sx = dx; sy = dy; stick = true;
+        knob.style.transform = 'translate(' + (dx * c.r * 0.6) + 'px,' + (dy * c.r * 0.6) + 'px)';
+      } else if (f.kind === 'dpad') {
+        var d = circleOf(f.el), ox = t.clientX - d.x, oy = t.clientY - d.y;
+        if (Math.hypot(ox, oy) > d.r * 0.2) {
+          var angle = Math.atan2(oy, ox) * 180 / Math.PI; // 0 = right, 90 = down
+          if (angle > -67.5 && angle < 67.5) buttons |= 0x20;
+          if (angle > 22.5 && angle < 157.5) buttons |= 0x40;
+          if (angle > 112.5 || angle < -112.5) buttons |= 0x80;
+          if (angle > -157.5 && angle < -22.5) buttons |= 0x10;
+        }
+      } else {
+        var over = document.elementFromPoint(t.clientX, t.clientY);
+        var button = over && over.closest('[data-btn]');
+        if (button && touchRoot.contains(button)) buttons |= Number(button.dataset.btn);
+      }
+    }
+    for (var id in fingers) if (!seen[id]) delete fingers[id];
+    if (!stick) knob.style.transform = '';
+    touchPad = { buttons: buttons, x: sx, y: sy, stick: stick };
+    touchRoot.querySelectorAll('[data-btn]').forEach(function (el) {
+      el.classList.toggle('on', (buttons & Number(el.dataset.btn)) !== 0);
+    });
+    touchRoot.querySelectorAll('[data-dir]').forEach(function (el) {
+      el.classList.toggle('on', (buttons & Number(el.dataset.dir)) !== 0);
+    });
+  }
+  ['touchstart', 'touchmove', 'touchend', 'touchcancel'].forEach(function (type) {
+    touchRoot.addEventListener(type, onTouch, { passive: false });
+  });
+
+  // Layout: hiding the on-screen controls, and fullscreen. Browsers without
+  // the Fullscreen API (iPhone Safari) get the same layout inside the page.
+  var body = document.body, root = document.documentElement;
+  var controlsButton = document.getElementById('controls-toggle');
+  var fullscreenButton = document.getElementById('fullscreen');
+  var landscape = matchMedia('(orientation: landscape)');
+  var requestFullscreen = root.requestFullscreen || root.webkitRequestFullscreen;
+  var exitFullscreen = document.exitFullscreen || document.webkitExitFullscreen;
+  var prefs = {}, fullscreen = false;
+  try { prefs = JSON.parse(localStorage.getItem('pspweb-ui') || '{}') || {}; } catch (e) {}
+  function savePrefs() { try { localStorage.setItem('pspweb-ui', JSON.stringify(prefs)); } catch (e) {} }
+  function nativeFullscreen() { return document.fullscreenElement || document.webkitFullscreenElement; }
+  function updateLayout() {
+    var touch = body.classList.contains('touch');
+    body.classList.toggle('no-controls', !!prefs.hideControls);
+    body.classList.toggle('immersive', fullscreen || (touch && landscape.matches));
+    controlsButton.hidden = !touch;
+    controlsButton.textContent = prefs.hideControls ? 'Show controls' : 'Hide controls';
+    fullscreenButton.textContent = fullscreen ? 'Exit fullscreen' : 'Fullscreen';
+  }
+  function toggleFullscreen() {
+    if (fullscreen) {
+      fullscreen = false;
+      if (nativeFullscreen() && exitFullscreen) exitFullscreen.call(document);
+    } else {
+      fullscreen = true;
+      var result = requestFullscreen ? requestFullscreen.call(root, { navigationUI: 'hide' }) : null;
+      if (result && result.then) result.then(function () {
+        if (body.classList.contains('touch') && screen.orientation && screen.orientation.lock)
+          screen.orientation.lock('landscape').catch(function () {});
+      }).catch(function () {});
+    }
+    updateLayout();
+  }
+  function onFullscreenChange() {
+    if (!nativeFullscreen() && fullscreen && requestFullscreen) { fullscreen = false; updateLayout(); }
+  }
+  document.addEventListener('fullscreenchange', onFullscreenChange);
+  document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+  if (landscape.addEventListener) landscape.addEventListener('change', updateLayout);
+  else if (landscape.addListener) landscape.addListener(updateLayout);
+  controlsButton.addEventListener('click', function () {
+    prefs.hideControls = !prefs.hideControls;
+    savePrefs();
+    updateLayout();
+  });
+  fullscreenButton.addEventListener('click', toggleFullscreen);
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'KeyF' && !e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey) toggleFullscreen();
+  });
+  updateLayout();
+
+  // Internal resolution, applied once the game is running and on every change.
+  var scaleSelect = document.getElementById('scale');
+  // Phones start at native resolution (their GPUs pay much more per pixel);
+  // computers at 3x.  An explicit choice is remembered either way.
+  var wantedScale = Number(prefs.scale) || (body.classList.contains('touch') ? 1 : 3), appliedScale = 0;
+  scaleSelect.value = String(wantedScale);
+  scaleSelect.addEventListener('change', function () {
+    wantedScale = Number(scaleSelect.value);
+    prefs.scale = wantedScale;
+    savePrefs();
+  });
+  function applyScale() {
+    if (appliedScale === wantedScale || !Module._pspweb_set_render_scale) return;
+    var used = Module._pspweb_set_render_scale(wantedScale);
+    if (used === 0) return; // renderer not started yet: try again next frame
+    appliedScale = wantedScale;
+    if (used !== wantedScale) { wantedScale = appliedScale = used; scaleSelect.value = String(used); }
+    // Smooth filtering when the picture is shrunk to fit; crisp pixels at native size.
+    Module.canvas.style.imageRendering = used > 1 ? 'auto' : 'pixelated';
+  }
+
+  // Audio: the game hands over 44.1 kHz stereo once per frame; an AudioWorklet
+  // plays it from a small queue.  Browsers only start audio after a user
+  // gesture, so the first tap, click or key press turns it on.
+  var WORKLET = [
+    'class PspOutput extends AudioWorkletProcessor {',
+    '  constructor(options) {',
+    '    super();',
+    '    this.queue = []; this.pos = 0; this.frames = 0; this.primed = false;',
+    '    this.step = 44100 / options.processorOptions.rate;',
+    '    this.port.onmessage = (e) => {',
+    '      this.queue.push(e.data); this.frames += e.data.length / 2;',
+    '      while (this.frames > 44100 * 0.25 && this.queue.length > 1) {',
+    '        this.frames -= this.queue[0].length / 2 - this.pos; this.queue.shift(); this.pos = 0;',
+    '      }',
+    '    };',
+    '  }',
+    '  process(inputs, outputs) {',
+    '    const left = outputs[0][0], right = outputs[0][1] || outputs[0][0];',
+    '    if (!this.primed) { if (this.frames < 2048) { left.fill(0); right.fill(0); return true; } this.primed = true; }',
+    '    for (let i = 0; i < left.length; i++) {',
+    '      const chunk = this.queue[0];',
+    '      if (!chunk) { left[i] = right[i] = 0; this.primed = false; continue; }',
+    '      const at = Math.floor(this.pos) * 2;',
+    '      left[i] = chunk[at]; right[i] = chunk[at + 1];',
+    '      const before = Math.floor(this.pos);',
+    '      this.pos += this.step;',
+    '      this.frames -= Math.floor(this.pos) - before;',
+    '      if (this.pos * 2 >= chunk.length) { this.pos -= chunk.length / 2; this.queue.shift(); }',
+    '    }',
+    '    return true;',
+    '  }',
+    '}',
+    "registerProcessor('psp-output', PspOutput);"
+  ].join('\n');
+  var sound = { context: null, node: null, gain: null, muted: !!prefs.muted };
+  var soundButton = document.getElementById('sound');
+  function updateSoundButton() { soundButton.textContent = sound.muted ? 'Unmute' : 'Mute'; }
+  updateSoundButton();
+  function startSound() {
+    if (sound.context) {
+      if (sound.context.state === 'suspended') sound.context.resume();
+      return;
+    }
+    var AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass || !window.AudioWorkletNode) return;
+    try { sound.context = new AudioContextClass({ sampleRate: 44100, latencyHint: 'interactive' }); }
+    catch (e) { sound.context = new AudioContextClass(); }
+    var url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
+    sound.context.audioWorklet.addModule(url).then(function () {
+      sound.node = new AudioWorkletNode(sound.context, 'psp-output',
+        { outputChannelCount: [2], processorOptions: { rate: sound.context.sampleRate } });
+      sound.gain = sound.context.createGain();
+      sound.gain.gain.value = sound.muted ? 0 : 1;
+      sound.node.connect(sound.gain).connect(sound.context.destination);
+    }).catch(function (e) { console.warn('audio unavailable', e); });
+  }
+  ['pointerup', 'touchend', 'keydown', 'mousedown'].forEach(function (type) {
+    window.addEventListener(type, startSound, { passive: true });
+  });
+  soundButton.addEventListener('click', function () {
+    sound.muted = !sound.muted;
+    prefs.muted = sound.muted;
+    savePrefs();
+    if (sound.gain) sound.gain.gain.value = sound.muted ? 0 : 1;
+    updateSoundButton();
+  });
+  Module.pspAudio = function (samples) {
+    if (!sound.node || sound.muted || sound.context.state !== 'running') return;
+    var data = new Float32Array(samples.length);
+    for (var i = 0; i < samples.length; i++) data[i] = samples[i] / 32768;
+    sound.node.port.postMessage(data, [data.buffer]);
+  };
+
+  var PAD_BUTTONS = [0x4000, 0x2000, 0x8000, 0x1000, 0x100, 0x200, 0, 0, 0x1, 0x8, 0, 0, 0x10, 0x40, 0x80, 0x20];
+  function pollInput() {
+    var buttons = touchPad.buttons, ax = 0, ay = 0;
+    for (var code in held) if (held[code]) {
+      if (code in KEYS) buttons |= KEYS[code];
+      if (code in STICK) { ax += STICK[code][0]; ay += STICK[code][1]; }
+    }
+    if (touchPad.stick) { ax = touchPad.x; ay = touchPad.y; }
+    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (var i = 0; i < pads.length; i++) {
+      var p = pads[i]; if (!p) continue;
+      p.buttons.forEach(function (b, n) { if (b.pressed && PAD_BUTTONS[n]) buttons |= PAD_BUTTONS[n]; });
+      if (Math.abs(p.axes[0]) > 0.15) ax = p.axes[0];
+      if (Math.abs(p.axes[1]) > 0.15) ay = p.axes[1];
+    }
+    applyScale();
+    if (Module._pspweb_set_pad) {
+      var lx = Math.max(0, Math.min(255, Math.round(128 + ax * 127)));
+      var ly = Math.max(0, Math.min(255, Math.round(128 + ay * 127)));
+      Module._pspweb_set_pad(buttons, lx, ly);
+    }
+    requestAnimationFrame(pollInput);
+  }
+  requestAnimationFrame(pollInput);
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

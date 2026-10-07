@@ -1,0 +1,22 @@
+# Your game files never go into the repository.
+/games/
+*.iso
+*.cso
+*.zip
+*.pbp
+*.PBP
+
+# Generated C++ is a translation of a game's code: keep it local.
+/profile/generated/
+
+# Fetched or built by scripts/setup.sh and the build scripts.
+/PSPRecomp/
+/tools/
+/build/
+
+*.ppm
+*.wav
+__pycache__/
+
+# Local editor and assistant settings.
+/.claude/
