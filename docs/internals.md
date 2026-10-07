@@ -41,13 +41,15 @@ build/native-<name>/profiles/web/pspweb_<name> games/<name>/root/EBOOT.BIN --dis
     --gl 1 --frames 2400 --scale 3 --dump-every 600 --dump frames/f --press 930:4000:6 --wav out.wav
 ```
 
-`--gl 1` renders with OpenGL ES through a surfaceless EGL context (without it the software rasterizer is used), `--dump` and `--dump-every` write frames as PPM images (`scripts/ppm2png.py` converts them), `--press frame:buttons:length` holds PSP buttons given in hex for some frames so you can walk through menus, `--wav` records the audio mix and `--threads 0` keeps the GE on the main thread. Every 60 frames it prints primitive and triangle counts, GE time, draw calls and extra GPU passes. At the end it lists every guest thread with what it waits on, and a watchdog reports where the guest spins if no frame completes for five seconds.
+`--gl 1` renders with OpenGL ES through a surfaceless EGL context (without it the software rasterizer is used), `--dump` and `--dump-every` write frames as PPM images (`scripts/ppm2png.py` converts them), `--press frame:buttons:length` holds PSP buttons given in hex for some frames so you can walk through menus, `--stick frame:x,y:length` holds the analog stick (0 to 255, 128 is the centre) so you can walk somewhere, `--wav` records the audio mix and `--threads 0` keeps the GE on the main thread. Every 60 frames it prints primitive and triangle counts, GE time, draw calls and extra GPU passes. At the end it lists every guest thread with what it waits on, and a watchdog reports where the guest spins if no frame completes for five seconds.
 
 ## Environment variables
 
 `PSPWEB_TRACE_HLE=1` logs every system call with its arguments and result. `PSPRECOMP_TRACE_ON_ERROR=1` prints the last dispatches when the guest crashes.
 
-`PSPWEB_DUMP_FRAME=n` logs every primitive of frame n with its render state and writes the textures it decodes into `build/dump` (or `PSPWEB_DUMP_DIR`); `PSPWEB_SKIP_PRIMS=a-b` leaves primitives a to b out of every frame. Together they find the draw behind a broken effect quickly.
+`PSPWEB_DUMP_FRAME=n` logs every primitive of frame n with its render state and writes the textures it decodes into `build/dump` (or `PSPWEB_DUMP_DIR`); `PSPWEB_SKIP_PRIMS=a-b,c-d` leaves those primitives out of every frame. Together they find the draw behind a broken effect quickly. Keep the first few primitives of a frame when bisecting, because they usually clear the screen, and without them every earlier frame shows through.
+
+To get to a later level without playing there, run the native runner on a copy of the disc made of symbolic links (`cp -as`) in which the first level's files point at the later level's. That boots some levels straight into the action, though a level that expects to be entered from a particular place may not start.
 
 `PSPWEB_PASS_FRAME=n` lists the extra GL passes of frame n: stencil and alpha syncing, pixel format reinterpretation and feedback copies. `PSPWEB_GE_PROFILE=1` times the GE's sections and breaks drawn pixels down by render target. `PSPWEB_NO_FLIP_THROTTLE=1` disables the frame swap throttle described below.
 
