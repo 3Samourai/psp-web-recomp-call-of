@@ -1,0 +1,89 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Local PSP Web Recomp <local@localhost>
+Date: Wed, 7 Oct 2026 21:30:00 +0200
+Subject: [PATCH] vfpu: decode and lower integer packing instructions
+
+Call of Duty: Roads to Victory packs VFPU vector integers into bytes with
+vi2uc.q during boot. Support the vi2uc/vi2c/vi2us/vi2s family, including
+source prefixes, signed and unsigned packing, and destination prefixes.
+
+---
+diff --git a/include/psprecomp/allegrex_context.hpp b/include/psprecomp/allegrex_context.hpp
+index 417658b..e3f8c3b 100644
+--- a/include/psprecomp/allegrex_context.hpp
++++ b/include/psprecomp/allegrex_context.hpp
+@@ -620,6 +620,29 @@ struct alignas(16) AllegrexContext {
+         write_vfpu_vector_with_destination_prefix(result, destination_register, destination_length);
+     }
+ 
++    void execute_vfpu_vi2x(std::uint32_t destination_register, std::uint32_t source_register,
++                          std::uint32_t source_length, std::uint32_t operation) noexcept {
++        if (source_length == 0u || source_length > 4u || operation > 3u) return;
++        float source[4]{};
++        read_vfpu_vector(source, source_register, source_length);
++        apply_vfpu_source_prefix(source, source_length, 0u);
++        const std::uint32_t bits = operation < 2u ? 8u : 16u;
++        const bool unsigned_pack = (operation & 1u) == 0u;
++        const std::uint32_t lanes_per_word = 32u / bits;
++        const std::uint32_t output_length = bits == 8u ? 1u : (source_length <= 2u ? 1u : 2u);
++        std::uint32_t packed[2]{};
++        for (std::uint32_t lane = 0u; lane < source_length; ++lane) {
++            std::uint32_t value = std::bit_cast<std::uint32_t>(source[lane]);
++            // Unsigned packing clamps negative integers and omits the sign bit.
++            if (unsigned_pack && (value & 0x80000000u) != 0u) value = 0u;
++            const std::uint32_t field = (value >> (32u - bits - (unsigned_pack ? 1u : 0u))) &
++                                       ((1u << bits) - 1u);
++            packed[lane / lanes_per_word] |= field << ((lane % lanes_per_word) * bits);
++        }
++        float result[2]{std::bit_cast<float>(packed[0]), std::bit_cast<float>(packed[1])};
++        write_vfpu_vector_with_destination_prefix(result, destination_register, output_length);
++    }
++
+     template <std::uint32_t DestinationScalarRegister, std::uint32_t SourceRegister,
+               std::uint32_t TargetRegister, std::uint32_t Length>
+     PSPRECOMP_CONTEXT_FORCEINLINE void execute_vfpu_vdot_ct() noexcept {
+diff --git a/include/psprecomp/decoder.hpp b/include/psprecomp/decoder.hpp
+index 2a896d0..2fdb1b6 100644
+--- a/include/psprecomp/decoder.hpp
++++ b/include/psprecomp/decoder.hpp
+@@ -18,7 +18,7 @@ enum class OpcodeKind {
+     AddS, SubS, MulS, DivS, SqrtS, AbsS, MovS, NegS,
+     RoundWS, TruncWS, CeilWS, FloorWS, CvtWS, CvtSW, FpuCompare,
+     Bc1f, Bc1t, Bc1fl, Bc1tl, Bvf, Bvt, Bvfl, Bvtl,
+-    Mfv, Mtv, Vpfx, Viim, Vfim, Vh2f, Vf2h, Vf2i, Vi2f, Vx2i, VmidT, Vmmov, VfpuMatrixInit, Vidt, Vcst, Vocp, VfpuHorizontal, Vrot, Vtfm, VfpuVectorInit, VfpuVec3, Vscl, Vdot, Vhdp, Vcmp, Vminmax, VfpuCompare3, Vcmov, VfpuUnary, Vmmul, Vmscl, VcrossQuat, Lvs, Svs, Lvq, Svq,
++    Mfv, Mtv, Vpfx, Viim, Vfim, Vh2f, Vf2h, Vf2i, Vi2f, Vx2i, Vi2x, VmidT, Vmmov, VfpuMatrixInit, Vidt, Vcst, Vocp, VfpuHorizontal, Vrot, Vtfm, VfpuVectorInit, VfpuVec3, Vscl, Vdot, Vhdp, Vcmp, Vminmax, VfpuCompare3, Vcmov, VfpuUnary, Vmmul, Vmscl, VcrossQuat, Lvs, Svs, Lvq, Svq,
+     Syscall,
+     Vflush,
+     Vfpu,
+diff --git a/src/decoder.cpp b/src/decoder.cpp
+index 9a771bf..1d25b57 100644
+--- a/src/decoder.cpp
++++ b/src/decoder.cpp
+@@ -311,6 +311,10 @@ DecodedInstruction decode_allegrex(std::uint32_t word) {
+             d.kind = OpcodeKind::Vx2i;
+             static constexpr const char *names[4]{"vuc2i", "vc2i", "vus2i", "vs2i"};
+             d.mnemonic = names[operation - 24u];
++        } else if (group == 1u && operation >= 28u && operation <= 31u) {
++            d.kind = OpcodeKind::Vi2x;
++            static constexpr const char *names[4]{"vi2uc", "vi2c", "vi2us", "vi2s"};
++            d.mnemonic = names[operation - 28u];
+         } else if (group >= 16u && group <= 19u) {
+             d.kind = OpcodeKind::Vf2i;
+             static constexpr const char *names[4]{"vf2in", "vf2iz", "vf2iu", "vf2id"};
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+index 2db2205..caedfb0 100644
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -434,6 +434,12 @@ std::string emit_regular(const psprecomp::DecodedInstruction &d, std::uint32_t p
+             << source_length << "u, " << operation << "u);\n";
+         break;
+     }
++    case psprecomp::OpcodeKind::Vi2x: {
++        const std::uint32_t size_code = ((d.word >> 7u) & 1u) | (((d.word >> 15u) & 1u) << 1u);
++        out << "    ctx.execute_vfpu_vi2x(" << (d.word & 0x7Fu) << "u, " << ((d.word >> 8u) & 0x7Fu)
++            << "u, " << size_code + 1u << "u, " << ((d.word >> 16u) & 3u) << "u);\n";
++        break;
++    }
+     case psprecomp::OpcodeKind::Mtv:
+         out << "    ctx.set_vfpu_scalar_bits(" << (d.word & 0xFFu) << "u, " << reg(d.rt) << ");\n";
+         break;

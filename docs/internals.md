@@ -14,6 +14,7 @@ This is the part of the documentation for working on the code: where things live
 | `io.cpp`, `webfs.cpp` | File system; the disc is streamed over HTTP Range requests in the browser |
 | `pgd.cpp` | Decrypts PGD (DRM) files that games set up with `sceIoIoctl` |
 | `mpeg.cpp` | The movie player's ring buffer and stream bookkeeping (no decoding yet) |
+| `font.cpp` | Original system font metrics and glyph rendering from the local PGF cache |
 | `sas.cpp`, `atrac.cpp` | Sound effect voices and ATRAC3+ music and speech |
 | `ge.cpp` | GE display lists, vertex processing and a software rasterizer fallback |
 | `ge_gl.cpp` | The WebGL2 / OpenGL ES 3 backend |
@@ -30,6 +31,7 @@ The scripts each do one step, and `scripts/port.sh` chains them:
 | `decrypt.sh` | Decrypt `EBOOT.BIN` with the tool named by `PSP_DECRYPT` |
 | `generate.sh` | Translate the executable to C++ with `psp_recomp` |
 | `manifest.py` | List the disc for streaming |
+| `prepare_game_fonts.sh`, `prepare_fonts.py` | Extract and decode original PGF system fonts when the game imports `sceLibFont` |
 | `build_web.sh`, `build_native.sh` | Build the page or the headless runner (`GEN_OPT` sets the optimization level of the generated code, `JOBS` the parallelism) |
 | `serve.sh`, `serve.py` | Serve a build with Range support and cross-origin isolation |
 
@@ -54,7 +56,7 @@ To get to a later level without playing there, run the native runner on a copy o
 
 `PSPWEB_PASS_FRAME=n` lists the extra GL passes of frame n: stencil and alpha syncing, pixel format reinterpretation and feedback copies. `PSPWEB_GE_PROFILE=1` times the GE's sections and breaks drawn pixels down by render target. `PSPWEB_NO_FLIP_THROTTLE=1` disables the frame swap throttle described below.
 
-In the browser, `?profile` shows per-frame timings in the status bar and `?threads=0` keeps the GE on the main thread. Building with `PROFILING=ON scripts/build_web.sh ...` keeps function names in the WebAssembly, so browser profilers show C++ names.
+In the browser, `?profile` shows per-frame timings in the status bar and `?threads=0` keeps the GE on the main thread. `?debug` exposes a Dump threads button that writes the current guest thread states to the page log. Building with `PROFILING=ON scripts/build_web.sh ...` keeps function names in the WebAssembly, so browser profilers show C++ names.
 
 ## Notes on the implementation
 
@@ -72,4 +74,30 @@ In the browser, `?profile` shows per-frame timings in the status bar and `?threa
 
 ## Changes to PSPRecomp
 
-`patches/` holds five commits on top of PSPRecomp, each with a description: a code generation loop on `jal` to import stubs, jumps to targets that are not translation unit entries, VFPU register numbers produced by data decoded as code, the `addi` instruction, the 16 KiB scratchpad at 0x00010000, functions only reachable through pointers (found by their prologue after a previous `jr ra`), and several VFPU instructions that were rejected before.
+Call of Duty builds two vertex converters in RAM from a finite set of instruction templates. `scripts/precompile_dynamic.py` runs the translated builders offline for 960 valid input combinations each, compiles the 1,914 unique routines through PSPRecomp, and registers dispatchers selected by the game's current format. The hook is restricted to the tested executable SHA-256. The browser runs the compiled C++ routines.
+
+Blocking controller reads wait for a fresh sample on the next frame; peeks remain immediate. The browser clears held keyboard state on focus loss, supports standard controller triggers, and offers an FPS layout with right-stick aiming.
+
+The scheduler rotates threads after a dispatch time slice so an equal-priority I/O worker can finish while a game polls for its result. GE synchronization barriers continue through their intermediate END commands; only the final FINISH/END pair emits a finish callback. GE FINISH events and enabled vertical-blank subinterrupts queue guest handlers on the scheduler thread, preserve the interrupted register context and respect CPU interrupt masking. Savedata size queries report the virtual memory stick's capacity and required allocation. The font HLE renders original decoded glyphs and synchronizes CPU texture writes with the GE worker.
+
+After building `cod-roads-to-victory`, test the real web host code with:
+
+```bash
+source tools/emsdk/emsdk_env.sh
+python3 -I tests/test_ge_callbacks.py
+```
+
+These Node/WebAssembly tests cover GE FINISH arguments, vertical-blank interrupt masking and context preservation, equal-priority scheduling, savedata size queries, and original font metrics and pixels, compiled RAM vertex decoders, and fresh blocking controller samples. Browser input tests run with `"$EMSDK_NODE" tests/input.cjs` after sourcing the SDK.
+
+`patches/` holds eight patches on top of PSPRecomp, each with a description: a code generation loop on `jal` to import stubs, jumps to targets that are not translation unit entries, VFPU register numbers produced by data decoded as code, the `addi` instruction, the 16 KiB scratchpad at 0x00010000, functions only reachable through pointers (found by their prologue after a previous `jr ra`), and several VFPU instructions that were rejected before. The sixth patch adds `vi2uc`, `vi2c`, `vi2us` and `vi2s` integer packing, used by Call of Duty: Roads to Victory. The seventh patch bounds local backward branches and jumps so tight guest loops yield to the scheduler. The eighth lowers `vt4444`, `vt5551` and `vt5650` packed color conversions. An existing setup can apply these with `git -C PSPRecomp apply ../patches/0006-vfpu-integer-packing.patch ../patches/0007-codegen-bound-local-loops.patch ../patches/0008-vfpu-color-packing.patch`, then rebuild the tools with `scripts/build_tools.sh`.
+
+The packing regression test covers signed and unsigned results, source swizzles, overlapping registers and destination masks:
+
+```bash
+c++ -std=c++20 -I PSPRecomp/include tests/vfpu_packing.cpp PSPRecomp/src/decoder.cpp -o build/test-vfpu-packing
+build/test-vfpu-packing
+python3 -I tests/test_local_loops.py
+python3 -I tests/test_color_packing.py
+```
+
+The loop regression generates and compiles small ELF fixtures with `beq`, `beql`, `j` and `jal` backedges. Each fixture must return to the dispatcher, then resume with its register values and delay-slot increments preserved. A process timeout catches regressions that would hang the browser.

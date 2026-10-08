@@ -218,7 +218,20 @@ bool Ge::run_list(std::uint32_t start, std::uint32_t stall) {
         if (page != nullptr) std::memcpy(&op, page + (pc_ - page_start), 4u);
         else op = memory_.load32(pc_);
         pc_ += 4u;
-        if ((op >> 24u) == kEnd) return true;
+        if ((op >> 24u) == kEnd) {
+            const std::uint32_t previous = memory_.load32(pc_ - 8u);
+            // SIGNAL SYNC / END / FINISH / END is a memory barrier inside
+            // the list. It neither completes the list nor calls guest code.
+            if ((previous >> 24u) == 0x0Eu && ((previous >> 16u) & 0xFFu) == 8u) {
+                sync_barrier_ = true;
+                continue;
+            }
+            if ((previous >> 24u) == kFinish) {
+                if (sync_barrier_) { sync_barrier_ = false; continue; }
+                if (finish_sink_) finish_sink_(previous & 0xFFFFu);
+            }
+            return true;
+        }
         execute(op);
     }
     return true;
@@ -1508,6 +1521,12 @@ void Ge::block_transfer() {
 void Ge::set_gl(GeGl *gl) {
     gl_ = gl;
     if (gl_ != nullptr) gl_->set_vram_write_hook([this](std::uint32_t address, std::uint32_t bytes) { touch_vram(address, bytes); });
+}
+
+void Ge::prepare_cpu_write(std::uint32_t address, std::uint32_t bytes) {
+    if (gl_) gl_->flush();
+    next_frame(); // revalidate RAM textures after a CPU glyph update
+    touch_vram(address, bytes);
 }
 
 void Ge::touch_vram(std::uint32_t address, std::uint32_t bytes) {

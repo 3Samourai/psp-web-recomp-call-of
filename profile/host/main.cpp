@@ -81,6 +81,9 @@ bool start_session(const std::string &module_path, const std::string &disc_root,
         std::cerr << "[pspweb] no disc manifest at " << manifest << ", using local files\n";
     s.kernel->install(imports);
     s.kernel->boot(elf.runtime_entry(load_base), module->gp, guest_path);
+#if defined(__EMSCRIPTEN__)
+    EM_ASM({ if (Module.pspConfigureInput) Module.pspConfigureInput(UTF8ToString($0)); }, PSPWEB_GAME_NAME);
+#endif
     s.running = true;
 
     std::cout << "[pspweb] module " << module->name << " loaded at 0x" << std::hex << load_base << "-0x"
@@ -232,6 +235,10 @@ void web_frame() {
     }
 }
 } // namespace
+
+extern "C" EMSCRIPTEN_KEEPALIVE void pspweb_dump_threads() {
+    if (g_session.kernel) g_session.kernel->dump_threads();
+}
 
 // Sets the internal resolution (1..4 times 480x272) and resizes the canvas.
 // Returns the scale that will be used, or 0 while the GL renderer is not up yet.

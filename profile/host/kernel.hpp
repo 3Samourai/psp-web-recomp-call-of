@@ -14,12 +14,14 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <span>
 #include <string>
@@ -37,7 +39,7 @@ inline constexpr std::uint32_t kVramAddress = 0x04000000u;
 inline constexpr std::uint32_t kVramSize = 0x00200000u;
 
 enum class ThreadState { Dormant, Ready, Running, Waiting, Dead };
-enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge };
+enum class WaitType { None, Sleep, Delay, Vblank, ThreadEnd, Sema, EventFlag, Fpl, Io, Callback, Ge, CtrlRead };
 
 // PSP pad button bits (SceCtrlData::Buttons).
 namespace pad {
@@ -330,11 +332,19 @@ private:
     void sceGeGetCmd(Ctx &ctx);
     void sceGeListSync(Ctx &ctx);
     void sceGeDrawSync(Ctx &ctx);
+    void sceGeSetCallback(Ctx &ctx);
+    void sceGeUnsetCallback(Ctx &ctx);
+    void poll_ge_callbacks();
 
     // UtilsForUser / Kernel_Library.
     void sceKernelLibcTime(Ctx &ctx);
     void sceKernelLibcGettimeofday(Ctx &ctx);
     void sceKernelCpuSuspendIntr(Ctx &ctx);
+    void sceKernelCpuResumeIntr(Ctx &ctx);
+    void sceKernelIsCpuIntrEnable(Ctx &ctx);
+    void sceKernelRegisterSubIntrHandler(Ctx &ctx);
+    void sceKernelEnableSubIntr(Ctx &ctx);
+    void sceKernelDisableSubIntr(Ctx &ctx);
     void sceKernelMemcpy(Ctx &ctx);
     void sceKernelMemset(Ctx &ctx);
     void return_zero(Ctx &ctx);
@@ -345,6 +355,8 @@ private:
     void audio_output(Ctx &ctx, AudioChannel &channel, std::uint32_t buffer, std::uint32_t lvol, std::uint32_t rvol);
     void dialog_get_status(Ctx &ctx, UtilityDialog &dialog);
     void sceCtrlPeekBufferPositive(Ctx &ctx);
+    void sceCtrlReadBufferPositive(Ctx &ctx);
+    void write_ctrl_sample(std::uint32_t address);
     void sceAudioChReserve(Ctx &ctx);
     void sceAudioChRelease(Ctx &ctx);
     void sceAudioOutputBlocking(Ctx &ctx);
@@ -355,6 +367,7 @@ private:
     void sceAudioOutput2OutputBlocking(Ctx &ctx);
     void sceAudioOutput2ChangeLength(Ctx &ctx);
     void sceUmdCheckMedium(Ctx &ctx);
+    void sceUmdGetDriveStat(Ctx &ctx);
     void sceImposeGetLanguageMode(Ctx &ctx);
     void sceDisplayGetFramePerSec(Ctx &ctx);
     void sceUtilitySavedataInitStart(Ctx &ctx);
@@ -366,11 +379,14 @@ private:
     void sceKernelCreateFpl(Ctx &ctx);
     void sceKernelDeleteFpl(Ctx &ctx);
     void sceKernelAllocateFpl(Ctx &ctx);
+    void sceKernelTryAllocateFpl(Ctx &ctx);
+    void allocate_fpl(Ctx &ctx, bool wait);
     void sceKernelFreeFpl(Ctx &ctx);
     void sceKernelReferThreadStatus(Ctx &ctx);
     void sceKernelReferEventFlagStatus(Ctx &ctx);
     void sceKernelLibcClock(Ctx &ctx);
     void sceRtcGetCurrentClockLocalTime(Ctx &ctx);
+    void sceRtcGetCurrentTick(Ctx &ctx);
     void sceKernelVolatileMemLock(Ctx &ctx);
 
     psprecomp::Runtime &rt_;
@@ -391,6 +407,25 @@ private:
         std::function<std::uint32_t(std::uint32_t)> done;
     };
     std::map<std::int32_t, GuestCall> guest_calls_;   // callback thread uid -> waiting caller
+    struct GeCallback {
+        std::uint32_t signal{}, signal_arg{}, finish{}, finish_arg{}, gp{};
+    };
+    struct GeCallbackEvent {
+        std::uint32_t entry{}, argument{}, value{}, gp{};
+        std::int32_t interrupt{-1}, subinterrupt{-1};
+    };
+    struct GeCallbackQueue {
+        std::mutex mutex;
+        std::deque<GeCallbackEvent> events;
+    };
+    std::map<std::uint32_t, GeCallback> ge_callbacks_;
+    std::shared_ptr<GeCallbackQueue> ge_callback_queue_ = std::make_shared<GeCallbackQueue>();
+    struct SubInterrupt {
+        std::uint32_t entry{}, argument{}, gp{};
+        bool enabled{}, pending{};
+    };
+    std::map<std::pair<std::uint32_t, std::uint32_t>, SubInterrupt> subinterrupts_;
+    bool interrupts_enabled_{true};
 
     // mpeg.cpp: sceMpeg (movies are consumed without decoding for now).
     void install_mpeg();
@@ -405,12 +440,15 @@ private:
     std::shared_ptr<void> sas_;             // sas.cpp state
     void install_atrac();    // atrac.cpp: ATRAC3/ATRAC3+ streams (music, speech)
     std::shared_ptr<void> atrac_;           // atrac.cpp state
+    void install_fonts();
+    std::shared_ptr<void> fonts_;
     std::array<AudioChannel, 8> audio_channels_{};
     AudioChannel audio_output2_{};
     AudioSink audio_sink_{};
     UtilityDialog savedata_dialog_{};
     UtilityDialog msg_dialog_{};
     std::uint32_t pad_buttons_{};
+    std::uint32_t ctrl_read_frame_{0xFFFFFFFFu};
     std::uint8_t pad_lx_{128u};
     std::uint8_t pad_ly_{128u};
     std::int32_t current_uid_{-1};

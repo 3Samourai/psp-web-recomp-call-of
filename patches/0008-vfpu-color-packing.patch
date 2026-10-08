@@ -1,0 +1,47 @@
+From 0000000000000000000000000000000000000008 Mon Sep 17 00:00:00 2001
+From: PSP Web Recomp <pspweb@localhost>
+Date: Thu, 8 Oct 2026 00:00:00 +0000
+Subject: [PATCH] Lower VFPU packed color conversions
+
+Emit vt4444, vt5551 and vt5650 with source prefixes, packed results
+and destination masks. These occur in RAM vertex decoder templates.
+
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -789,6 +789,7 @@
+         const std::uint32_t size_code = ((w >> 7u) & 1u) | (((w >> 15u) & 1u) << 1u);
+         const std::uint32_t length = size_code + 1u;
+         std::uint32_t out_length = length;
++        std::uint32_t read_length = length;
+         const std::uint32_t destination = w & 0x7Fu, source = (w >> 8u) & 0x7Fu;
+         std::string op;
+         switch ((w >> 16u) & 31u) {
+@@ -812,10 +813,24 @@
+             op = "for (std::uint32_t i = 0; i < " + std::to_string(length) +
+                  "u; ++i) d[i] = s[i] > 0.0f ? 1.0f : (s[i] < 0.0f ? -1.0f : 0.0f);";
+             break;
++        case 25: case 26: case 27: { // vt4444, vt5551, vt5650
++            const unsigned format = (w >> 16u) & 3u;
++            read_length = 4u;
++            out_length = length == 1u ? 1u : 2u;
++            const std::string packed = format == 1u
++                ? "((v >> 4u) & 15u) | ((v >> 8u) & 240u) | ((v >> 12u) & 3840u) | ((v >> 16u) & 61440u)"
++                : format == 2u
++                ? "((v >> 3u) & 31u) | ((v >> 6u) & 992u) | ((v >> 9u) & 31744u) | ((v >> 16u) & 32768u)"
++                : "((v >> 3u) & 31u) | ((v >> 5u) & 2016u) | ((v >> 8u) & 63488u)";
++            op = "std::uint32_t colors[2]{}; for (unsigned i = 0; i < 4; ++i) { "
++                "const auto v = std::bit_cast<std::uint32_t>(s[i]); colors[i / 2u] |= (" + packed + ") << ((i & 1u) * 16u); } "
++                "d[0] = std::bit_cast<float>(colors[0]); d[1] = std::bit_cast<float>(colors[1]);";
++            break;
++        }
+         default: return std::nullopt;
+         }
+         out << "    { float s[4]{}, d[4]{};\n"
+-            << "      ctx.read_vfpu_vector_with_source_prefix(s, " << source << "u, " << length << "u, 0u);\n"
++            << "      ctx.read_vfpu_vector_with_source_prefix(s, " << source << "u, " << read_length << "u, 0u);\n"
+             << "      " << op << "\n"
+             << "      ctx.write_vfpu_vector_with_destination_prefix(d, " << destination << "u, " << out_length << "u); }\n";
+         return out.str();
+-- 
+2.39.5

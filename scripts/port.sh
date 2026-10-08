@@ -53,6 +53,7 @@ echo "== [4/5] bundle"
 mkdir -p "$game/root/ms0" "$game/preload/ms0"
 python3 -I "$here/manifest.py" "$disc" "$game/root/disc.manifest"
 cp "$game/root/EBOOT.BIN" "$game/root/disc.manifest" "$game/preload/"
+"$here/prepare_game_fonts.sh" "$name"
 
 echo "== [5/5] build"
 GEN_OPT="$opt" "$here/build_web.sh" "$name" "$game/preload" "$guest"

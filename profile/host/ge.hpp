@@ -10,6 +10,8 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
+#include <utility>
 #include <unordered_map>
 #include <vector>
 
@@ -24,6 +26,7 @@ public:
     // Executes a display list from `start` until END or the stall address.
     // Returns true when the list reached its end.
     bool run_list(std::uint32_t start, std::uint32_t stall);
+    void set_finish_sink(std::function<void(std::uint32_t)> sink) { finish_sink_ = std::move(sink); sync_barrier_ = false; }
 
     struct Stats {
         std::uint64_t lists{};
@@ -52,6 +55,7 @@ public:
     void set_gl(GeGl *gl);
     // Marks guest VRAM bytes as rewritten so cached textures there revalidate.
     void touch_vram(std::uint32_t address, std::uint32_t bytes);
+    void prepare_cpu_write(std::uint32_t address, std::uint32_t bytes);
 
 private:
     // Drawing-space vertex: pixels, depth 0..65535, texels, colour 0..255.
@@ -224,6 +228,8 @@ private:
     std::array<std::uint8_t, 2048> clut_{};
 
     Stats stats_{};
+    std::function<void(std::uint32_t)> finish_sink_;
+    bool sync_barrier_{};
 };
 
 } // namespace pspweb

@@ -150,6 +150,23 @@ void Kernel::install_mpeg() {
     });
     simple(0x4571CC64u, "sceMpegAvcDecodeFlush", [](Ctx &) { return 0u; });
     simple(0x800C44DFu, "sceMpegAtracDecode", [](Ctx &) { return 0u; });
+    simple(0xA11C7026u, "sceMpegAvcDecodeMode", [](Ctx &) { return 0u; });
+    simple(0x211A057Cu, "sceMpegAvcQueryYCbCrSize", [&m](Ctx &ctx) {
+        const std::uint32_t width = ctx.gpr[6], height = ctx.gpr[7];
+        if ((width & 15u) != 0u || (height & 15u) != 0u || width > 480u || height > 272u)
+            return kErrorMpegInvalidValue;
+        if (ctx.gpr[8] != 0u) m.store32(ctx.gpr[8], (width / 2u) * (height / 2u) * 6u + 128u);
+        return 0u;
+    });
+    simple(0x67179B1Bu, "sceMpegAvcInitYCbCr", [](Ctx &) { return 0u; });
+    simple(0xF0EB1125u, "sceMpegAvcDecodeYCbCr", [&m](Ctx &ctx) {
+        if (ctx.gpr[7] != 0u) m.store32(ctx.gpr[7], 0u);
+        return 0u;
+    });
+    simple(0xF2930C9Cu, "sceMpegAvcDecodeStopYCbCr", [&m](Ctx &ctx) {
+        if (ctx.gpr[6] != 0u) m.store32(ctx.gpr[6], 0u);
+        return 0u;
+    });
 
     // sceMpegRingbufferPut calls the game's reader on a guest thread.
     rt_.register_hle("sceMpeg", 0xB240A59Eu, [this, &m](psprecomp::Runtime &, Ctx &ctx) {
@@ -178,7 +195,7 @@ void Kernel::install_mpeg() {
                                     0xB5F6DC87u, 0xD8C5F121u, 0x606A4649u, 0x42560F23u, 0x591A4AA2u, 0x707B7629u,
                                     0xA780CF7Eu, 0xCEB870B1u, 0x167AFD9Eu, 0xF8DCB679u, 0x21FF80E4u, 0x611E9E11u,
                                     0xFE246728u, 0xE1CE83A7u, 0x0E3C2E9Du, 0x740FCCD1u, 0x4571CC64u, 0x800C44DFu,
-                                    0xB240A59Eu})
+                                    0xB240A59Eu, 0xA11C7026u, 0x211A057Cu, 0x67179B1Bu, 0xF0EB1125u, 0xF2930C9Cu})
         mark(nid);
 }
 

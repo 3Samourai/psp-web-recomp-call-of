@@ -153,6 +153,9 @@
     <span id="fps" class="meta"></span>
     <span id="profile" class="meta" hidden></span>
     <span class="actions">
+      <select id="input-profile" aria-label="Control layout">
+        <option value="psp">PSP controls</option><option value="fps">FPS controls</option>
+      </select>
       <select id="scale" aria-label="Resolution" title="Internal resolution">
         <option value="1">480×272</option>
         <option value="2">960×544</option>
@@ -160,6 +163,7 @@
         <option value="4">1920×1088</option>
       </select>
       <button id="sound" type="button">Mute</button>
+      <button id="dump-threads" type="button" hidden onclick="if (Module._pspweb_dump_threads) Module._pspweb_dump_threads()">Dump threads</button>
       <button id="controls-toggle" type="button" hidden>Hide controls</button>
       <button id="fullscreen" type="button">Fullscreen</button>
     </span>
@@ -187,9 +191,10 @@
       </div>
     </div>
   </div>
-  <p class="keys">Controls: arrow keys for the D-pad, Z for ✕, X for ○, A for □, S for △, Q and W for L and R, Enter for Start, Shift for Select, and I/J/K/L for the analog stick. Gamepads work too. F toggles fullscreen.</p>
+  <p id="keys" class="keys">Controls: arrow keys for the D-pad, Z for ✕, X for ○, A for □, S for △, Q and W for L and R, Enter for Start, Shift for Select, and I/J/K/L for the analog stick. Gamepads work too. F toggles fullscreen.</p>
   <pre id="log"></pre>
 </main>
+<script src="input.js"></script>
 <script>
   var logEl = document.getElementById('log');
   var statusEl = document.getElementById('status');
@@ -256,14 +261,42 @@
       }
     }
   };
+  document.getElementById('dump-threads').hidden = !/[?&]debug\b/.test(location.search);
   // Keyboard and gamepad -> PSP pad (SceCtrlData button bits).
-  var KEYS = { ArrowUp: 0x10, ArrowRight: 0x20, ArrowDown: 0x40, ArrowLeft: 0x80, KeyZ: 0x4000, KeyX: 0x2000,
-               KeyA: 0x8000, KeyS: 0x1000, KeyQ: 0x100, KeyW: 0x200, Enter: 0x8, ShiftLeft: 0x1, ShiftRight: 0x1 };
-  var STICK = { KeyJ: [-1, 0], KeyL: [1, 0], KeyI: [0, -1], KeyK: [0, 1] };
-  var held = {};
+  var input = new PspInput(), inputProfile = document.getElementById('input-profile');
+  var inputGame = '';
+  var pspKeysText = document.getElementById('keys').textContent;
+  function setInputProfile(profile) {
+    input.setProfile(profile); inputProfile.value = input.profile;
+    document.getElementById('keys').textContent = input.profile === 'fps'
+      ? 'WASD moves. I/J/K/L look, V fires, Q aims, Esc pauses. R reloads, E uses, C crouches, Space jumps, 1 switches weapons. Enter or Z accepts menus, X goes back, arrows navigate. Gamepad: left stick moves, right stick aims, triggers aim/fire. F toggles fullscreen.'
+      : pspKeysText;
+  }
+  Module.pspConfigureInput = function (game) {
+    inputGame = game;
+    var saved = prefs.inputProfiles && prefs.inputProfiles[game];
+    setInputProfile(saved || (game === 'cod-roads-to-victory' ? 'fps' : 'psp'));
+  };
+  inputProfile.addEventListener('change', function () {
+    setInputProfile(inputProfile.value);
+    prefs.inputProfiles = prefs.inputProfiles || {};
+    prefs.inputProfiles[inputGame] = input.profile;
+    savePrefs();
+  });
+  window.addEventListener('blur', function () {
+    input.clear(); fingers = {}; touchPad = {buttons:0, x:0, y:0, stick:false};
+    if (knob) knob.style.transform = '';
+    if (touchRoot) touchRoot.querySelectorAll('.on').forEach(function (el) { el.classList.remove('on'); });
+    if (Module._pspweb_set_pad) Module._pspweb_set_pad(0,128,128);
+  });
+  document.addEventListener('visibilitychange', function () { if (document.hidden) input.clear(); });
   function onKey(e, down) {
-    if (!(e.code in KEYS) && !(e.code in STICK)) return;
-    held[e.code] = down; e.preventDefault();
+    if (!down) input.key(e.code, false);
+    if (e.metaKey || e.altKey) return;
+    if (e.ctrlKey && !/^Control/.test(e.code)) return;
+    if (e.target && (e.target.matches('input,textarea,select') || e.target.isContentEditable)) return;
+    if (!input.recognizes(e.code)) return;
+    input.key(e.code, down); e.preventDefault();
   }
   window.addEventListener('keydown', function (e) { onKey(e, true); });
   window.addEventListener('keyup', function (e) { onKey(e, false); });
@@ -471,26 +504,13 @@
     sound.node.port.postMessage(data, [data.buffer]);
   };
 
-  var PAD_BUTTONS = [0x4000, 0x2000, 0x8000, 0x1000, 0x100, 0x200, 0, 0, 0x1, 0x8, 0, 0, 0x10, 0x40, 0x80, 0x20];
   function pollInput() {
-    var buttons = touchPad.buttons, ax = 0, ay = 0;
-    for (var code in held) if (held[code]) {
-      if (code in KEYS) buttons |= KEYS[code];
-      if (code in STICK) { ax += STICK[code][0]; ay += STICK[code][1]; }
-    }
-    if (touchPad.stick) { ax = touchPad.x; ay = touchPad.y; }
-    var pads = navigator.getGamepads ? navigator.getGamepads() : [];
-    for (var i = 0; i < pads.length; i++) {
-      var p = pads[i]; if (!p) continue;
-      p.buttons.forEach(function (b, n) { if (b.pressed && PAD_BUTTONS[n]) buttons |= PAD_BUTTONS[n]; });
-      if (Math.abs(p.axes[0]) > 0.15) ax = p.axes[0];
-      if (Math.abs(p.axes[1]) > 0.15) ay = p.axes[1];
-    }
+    var active = !document.hidden && document.hasFocus();
+    var pads = active && navigator.getGamepads ? navigator.getGamepads() : [];
+    var pad = active ? input.sample(pads, touchPad) : {buttons:0,lx:128,ly:128};
     applyScale();
     if (Module._pspweb_set_pad) {
-      var lx = Math.max(0, Math.min(255, Math.round(128 + ax * 127)));
-      var ly = Math.max(0, Math.min(255, Math.round(128 + ay * 127)));
-      Module._pspweb_set_pad(buttons, lx, ly);
+      Module._pspweb_set_pad(pad.buttons, pad.lx, pad.ly);
     }
     requestAnimationFrame(pollInput);
   }

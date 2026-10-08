@@ -40,7 +40,7 @@ void Kernel::return_one(Ctx &ctx) { finish(ctx, 1u); }
 void Kernel::install_devices() {
     const char *ctrl = "sceCtrl";
     hle(ctrl, 0x3A622550u, "sceCtrlPeekBufferPositive", &Kernel::sceCtrlPeekBufferPositive);
-    hle(ctrl, 0x1F803938u, "sceCtrlReadBufferPositive", &Kernel::sceCtrlPeekBufferPositive);
+    hle(ctrl, 0x1F803938u, "sceCtrlReadBufferPositive", &Kernel::sceCtrlReadBufferPositive);
     hle(ctrl, 0x1F4011E6u, "sceCtrlSetSamplingMode", &Kernel::return_zero);
     hle(ctrl, 0x6A2774F3u, "sceCtrlSetSamplingCycle", &Kernel::return_zero);
     hle(ctrl, 0xA7144800u, "sceCtrlSetIdleCancelThreshold", &Kernel::return_zero);
@@ -60,6 +60,7 @@ void Kernel::install_devices() {
     hle(audio, 0x63F2889Cu, "sceAudioOutput2ChangeLength", &Kernel::sceAudioOutput2ChangeLength);
 
     hle("sceUmdUser", 0x46EBB729u, "sceUmdCheckMedium", &Kernel::sceUmdCheckMedium);
+    hle("sceUmdUser", 0x6B4A146Cu, "sceUmdGetDriveStat", &Kernel::sceUmdGetDriveStat);
     hle("sceUmdUser", 0xC6183D47u, "sceUmdActivate", &Kernel::return_zero);
     hle("sceUmdUser", 0x56202973u, "sceUmdWaitDriveStatWithTimer", &Kernel::return_zero);
     hle("sceUmdUser", 0x8EF08FCEu, "sceUmdWaitDriveStat", &Kernel::return_zero);
@@ -67,8 +68,9 @@ void Kernel::install_devices() {
     hle("sceImpose", 0x36AA6E91u, "sceImposeSetLanguageMode", &Kernel::return_zero);
     hle("sceDisplay", 0xDBA6C4C4u, "sceDisplayGetFramePerSec", &Kernel::sceDisplayGetFramePerSec);
     hle("sceRtc", 0xE7C27D1Bu, "sceRtcGetCurrentClockLocalTime", &Kernel::sceRtcGetCurrentClockLocalTime);
+    hle("sceRtc", 0x3F7AD767u, "sceRtcGetCurrentTick", &Kernel::sceRtcGetCurrentTick);
     hle("UtilsForUser", 0x91E4F6A7u, "sceKernelLibcClock", &Kernel::sceKernelLibcClock);
-    hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::return_one);
+    hle("Kernel_Library", 0xB55249D2u, "sceKernelIsCpuIntrEnable", &Kernel::sceKernelIsCpuIntrEnable);
 
     const char *util = "sceUtility";
     hle(util, 0x50C4CD57u, "sceUtilitySavedataInitStart", &Kernel::sceUtilitySavedataInitStart);
@@ -84,6 +86,7 @@ void Kernel::install_devices() {
     hle(tm, 0xC07BB470u, "sceKernelCreateFpl", &Kernel::sceKernelCreateFpl);
     hle(tm, 0xED1410E0u, "sceKernelDeleteFpl", &Kernel::sceKernelDeleteFpl);
     hle(tm, 0xD979E9BFu, "sceKernelAllocateFpl", &Kernel::sceKernelAllocateFpl);
+    hle(tm, 0x623AE665u, "sceKernelTryAllocateFpl", &Kernel::sceKernelTryAllocateFpl);
     hle(tm, 0xF6414A71u, "sceKernelFreeFpl", &Kernel::sceKernelFreeFpl);
     hle(tm, 0x17C1684Eu, "sceKernelReferThreadStatus", &Kernel::sceKernelReferThreadStatus);
     hle(tm, 0xA66B0120u, "sceKernelReferEventFlagStatus", &Kernel::sceKernelReferEventFlagStatus);
@@ -122,16 +125,33 @@ void Kernel::sceKernelVolatileMemLock(Ctx &ctx) {
 // ---------------------------------------------------------------------------
 // sceCtrl
 
+void Kernel::write_ctrl_sample(std::uint32_t entry) {
+    rt_.memory().store32(entry, static_cast<std::uint32_t>(now_us()));
+    rt_.memory().store32(entry + 4u, pad_buttons_);
+    rt_.memory().store8(entry + 8u, pad_lx_);
+    rt_.memory().store8(entry + 9u, pad_ly_);
+    for (std::uint32_t j = 10u; j < 16u; ++j) rt_.memory().store8(entry + j, 0u);
+}
+
+void Kernel::sceCtrlReadBufferPositive(Ctx &ctx) {
+    // A blocking read consumes one fresh controller sample. Returning the
+    // same held button repeatedly within a frame makes menus skip entries.
+    if (auto *self = current(); self && ctrl_read_frame_ == display_.vcount) {
+        self->wait_out_address = ctx.gpr[4];
+        block(ctx, WaitType::CtrlRead, 1u);
+        return;
+    }
+    ctrl_read_frame_ = display_.vcount;
+    write_ctrl_sample(ctx.gpr[4]);
+    finish(ctx, 1u);
+}
+
 void Kernel::sceCtrlPeekBufferPositive(Ctx &ctx) {
     const std::uint32_t data = ctx.gpr[4];
-    const std::uint32_t count = std::max(ctx.gpr[5], 1u);
+    const std::uint32_t count = std::clamp(ctx.gpr[5], 1u, 64u);
     for (std::uint32_t i = 0; i < count; ++i) {
         const std::uint32_t entry = data + i * 16u;
-        rt_.memory().store32(entry + 0u, static_cast<std::uint32_t>(now_us()));
-        rt_.memory().store32(entry + 4u, pad_buttons_);
-        rt_.memory().store8(entry + 8u, pad_lx_);
-        rt_.memory().store8(entry + 9u, pad_ly_);
-        for (std::uint32_t j = 10u; j < 16u; ++j) rt_.memory().store8(entry + j, 0u);
+        write_ctrl_sample(entry);
     }
     finish(ctx, count);
 }
@@ -301,6 +321,23 @@ void Kernel::sceDisplayGetFramePerSec(Ctx &ctx) {
 
 void Kernel::sceKernelLibcClock(Ctx &ctx) { finish(ctx, static_cast<std::uint32_t>(now_us())); }
 
+void Kernel::sceUmdGetDriveStat(Ctx &ctx) {
+    // A mounted disc is present, initialized and readable.
+    finish(ctx, 0x32u);
+}
+
+void Kernel::sceRtcGetCurrentTick(Ctx &ctx) {
+    // PSP ticks are microseconds since 0001-01-01. Advance with guest time.
+    static const std::uint64_t epoch = 62135596800000000ull +
+        static_cast<std::uint64_t>(std::time(nullptr)) * 1000000ull;
+    if (ctx.gpr[4] != 0u) {
+        const std::uint64_t ticks = epoch + now_us();
+        rt_.memory().store32(ctx.gpr[4], static_cast<std::uint32_t>(ticks));
+        rt_.memory().store32(ctx.gpr[4] + 4u, static_cast<std::uint32_t>(ticks >> 32u));
+    }
+    finish(ctx, 0u);
+}
+
 void Kernel::sceRtcGetCurrentClockLocalTime(Ctx &ctx) {
     const std::time_t now = std::time(nullptr);
     std::tm local{};
@@ -342,6 +379,40 @@ void Kernel::sceUtilitySavedataInitStart(Ctx &ctx) {
     // Loads (autoload/load/list-load) report "no data"; everything else succeeds.
     const bool load = mode == 0u || mode == 2u || mode == 4u;
     rt_.memory().store32(params + 0x1Cu, load ? kErrorSavedataLoadNoData : 0u);
+    if (mode == 8u && rt_.memory().load32(params) >= 0x5DCu) {
+        // The in-memory stick has no disk quota. Expose a 1 GiB virtual
+        // capacity instead of leaving the caller's free-space buffer at zero.
+        constexpr std::uint32_t cluster_bytes = 32768u, free_kb = 1024u * 1024u;
+        auto &m = rt_.memory();
+        const auto text = [&m](std::uint32_t address, const std::string &value) {
+            for (std::uint32_t i = 0u; i < 8u; ++i)
+                m.store8(address + i, i < value.size() && i < 7u ? static_cast<std::uint8_t>(value[i]) : 0u);
+        };
+        const std::uint32_t free_info = m.load32(params + 0x5D0u);
+        if (free_info != 0u) {
+            m.store32(free_info, cluster_bytes);
+            m.store32(free_info + 4u, free_kb / (cluster_bytes / 1024u));
+            m.store32(free_info + 8u, free_kb);
+            text(free_info + 12u, "1 GB");
+        }
+        const std::uint32_t ms_data = m.load32(params + 0x5D4u);
+        if (ms_data != 0u) {
+            for (std::uint32_t i = 0u; i < 28u; i += 4u) m.store32(ms_data + 36u + i, 0u);
+        }
+        const std::uint32_t utility_info = m.load32(params + 0x5D8u);
+        if (utility_info != 0u) {
+            std::uint64_t bytes = m.load32(params + 0x7Cu);
+            for (std::uint32_t file = 0u; file < 4u; ++file)
+                bytes += m.load32(params + 0x58Cu + file * 16u);
+            const std::uint32_t clusters = static_cast<std::uint32_t>((bytes + cluster_bytes - 1u) / cluster_bytes) + 2u;
+            const std::uint32_t kb = clusters * (cluster_bytes / 1024u);
+            m.store32(utility_info, clusters);
+            m.store32(utility_info + 4u, kb);
+            text(utility_info + 8u, std::to_string(kb) + " KB");
+            m.store32(utility_info + 16u, kb);
+            text(utility_info + 20u, std::to_string(kb) + " KB");
+        }
+    }
     savedata_dialog_ = UtilityDialog{1u, params};
     finish(ctx, 0u);
 }
@@ -402,6 +473,14 @@ void Kernel::sceKernelDeleteFpl(Ctx &ctx) {
 }
 
 void Kernel::sceKernelAllocateFpl(Ctx &ctx) {
+    allocate_fpl(ctx, true);
+}
+
+void Kernel::sceKernelTryAllocateFpl(Ctx &ctx) {
+    allocate_fpl(ctx, false);
+}
+
+void Kernel::allocate_fpl(Ctx &ctx, bool wait) {
     const std::int32_t uid = static_cast<std::int32_t>(ctx.gpr[4]);
     const auto it = fpls_.find(uid);
     if (it == fpls_.end()) {
@@ -414,6 +493,10 @@ void Kernel::sceKernelAllocateFpl(Ctx &ctx) {
         pool.used[i] = true;
         rt_.memory().store32(ctx.gpr[5], pool.base + static_cast<std::uint32_t>(i) * pool.block_size);
         finish(ctx, 0u);
+        return;
+    }
+    if (!wait) {
+        finish(ctx, kErrorNoMemory);
         return;
     }
     Thread *self = current();

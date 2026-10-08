@@ -110,9 +110,11 @@ void GeWorker::call(std::function<void()> work) {
     while (!finished.load()) relax();
 }
 
-std::uint32_t GeWorker::enqueue(std::uint32_t list, std::uint32_t stall) {
+std::uint32_t GeWorker::enqueue(std::uint32_t list, std::uint32_t stall,
+                              std::function<void(std::uint32_t)> on_finish) {
     const std::uint32_t id = ++queued_;
-    post([this, id, list, stall] {
+    post([this, id, list, stall, on_finish = std::move(on_finish)]() mutable {
+        ge_.set_finish_sink(std::move(on_finish));
         if (ge_.run_list(list, stall)) {
             stalled_pc_ = 0u;
             completed_.store(id);

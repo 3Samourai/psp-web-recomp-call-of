@@ -7,3 +7,4 @@ out="$FRAMEWORK/profiles/web/generated/$game"
 [ -x "$TOOLS_BUILD/psp_recomp" ] || "$(dirname "$0")/build_tools.sh"
 mkdir -p "$out"  # psp_recomp only rewrites units whose code changed
 "$TOOLS_BUILD/psp_recomp" "$module" --auto "$out" 0x08804000 0x4000
+python3 -I "$(dirname "$0")/precompile_dynamic.py" "$module" "$out"

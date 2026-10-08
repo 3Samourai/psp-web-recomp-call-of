@@ -1,25 +1,16 @@
-# PSP Web Recomp
+# Call of Duty: Roads to Victory Web Recomp
 
-PSP games running in the browser without an emulator. The game's MIPS machine code is translated ahead of time into C++, compiled to WebAssembly, and linked against a small reimplementation of the PSP's operating system and graphics chip that draws with WebGL2.
+Call of Duty: Roads to Victory running in the browser without an emulator. The game MIPS machine code is translated ahead of time into C++, compiled to WebAssembly, and linked against a small reimplementation of the PSP's operating system and graphics chip that draws with WebGL2.
+
+This project builds on [PSP Web Recomp by Samir Nuri (snuri00)](https://github.com/snuri00/psp-web-recomp). It adds Call of Duty: Roads to Victory support, system fonts, scheduling and graphics fixes, and keyboard and gamepad control improvements.
 
 <p align="center">
-  <img src="docs/media/demo.webp" alt="God of War: Chains of Olympus running in a browser" width="720">
+  <img src="docs/media/call-of-duty-demo.webp" alt="Call of Duty: Roads to Victory running in a browser" width="720">
   <br>
-  <a href="docs/media/demo.mp4">Watch the full recording (1:46)</a>
+  <a href="docs/media/call-of-duty-demo.mp4">Watch the full recording (1:16)</a>
 </p>
 
-| Title menu | In the browser | Fullscreen at 1440×816 |
-|---|---|---|
-| ![Title menu](docs/media/menu.jpg) | ![The page](docs/media/page.jpg) | ![Combat](docs/media/combat.jpg) |
-
-The first title brought up this way is God of War: Chains of Olympus. It plays from boot through the menus, cutscenes and combat, at 60 frames per second in the scenes measured so far in Chrome and Firefox on a laptop, at up to four times the PSP's resolution, and on phones with on-screen touch controls. Music, speech and sound effects work. Movies are skipped for now.
-
-God of War: Ghost of Sparta followed through the same scripts. It needed the PSP's DRM decryption for one small file, a handful of system calls and a lighting fix, and no performance work: it runs at 55 to 60 frames per second at three times the native resolution.
-
-No game data is included here. You bring a disc image of a game you own, and the scripts in this repository turn it into a web page on your machine.
-
 ## How it works
-
 **Recompilation.** [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) analyses the decrypted executable, finds its functions and emits C++ for them in translation units of 16 KiB of guest code each. That code runs against a register file and a model of the PSP's memory. This project adds a handful of fixes to PSPRecomp (in `patches/`) and a new target for it, the web profile in `profile/`.
 
 **A small PSP kernel.** Whatever the game asks of the PSP's operating system is answered by high-level emulation in `profile/host`: cooperative threads with semaphores, event flags and callbacks, memory partitions, the file system (with disc data streamed over HTTP Range requests, so only the executable is downloaded up front), the controller, audio output, the save data and message dialogs, and the movie player's bookkeeping. Guest time advances in frames, so a game sees a steady 60 Hz however fast the host runs.
@@ -30,44 +21,115 @@ No game data is included here. You bring a disc image of a game you own, and the
 
 **Sound.** Sound effects come from a reimplementation of the PSP's voice synthesizer (32 voices of ADPCM with pitch and ADSR envelopes), music and speech from ATRAC3+ streams decoded with the FFmpeg decoder, and the mix goes to an AudioWorklet.
 
-## Lessons from making it fast
+## Changes in this version
 
-The first playable build ran at 6 frames per second. Most of the way to 60 came from finding out where the time actually went rather than from making the renderer faster.
+Call of Duty: Roads to Victory (USA, multilingual) has been built and checked on Apple Silicon macOS through the `port.sh` pipeline, reaching the main menu, campaign selection, mission briefings and the gameplay shown in the demo above.
 
-God of War swaps its framebuffer without waiting for the vertical blank, so with nothing to hold it back the game drew around eight frames for every one that reached the screen. Holding the thread that swaps twice within one blank until the next one, a trick PPSSPP also uses, cut the work per displayed frame by a factor of eight on its own.
+The recompiler now supports VFPU integer packing (`vi2uc`, `vi2c`, `vi2us`, `vi2s`) and packed color conversions (`vt4444`, `vt5551`, `vt5650`). Tight local loops yield back to the scheduler, and threads at the same priority get time to run, so a game polling for an I/O result can let the worker finish it.
 
-In WebAssembly, reading the clock through `std::chrono` goes through `clock_gettime` and a BigInt conversion in JavaScript. Profiling timers that read it per primitive took about a third of the frame until they were made to read `performance.now()` only when profiling is on.
+The graphics path handles GE synchronization barriers and FINISH callbacks, and the kernel delivers vertical-blank subinterrupts with the guest's register context preserved. Additional system calls cover nonblocking fixed-pool allocation, UMD readiness, RTC ticks, savedata size queries and the movie player's YCbCr bookkeeping.
 
-Firefox copies every WebGL buffer upload to its GPU process, and after any change to an index buffer it re-validates the whole buffer on the next draw. A shared 4 MB index ring therefore dropped Firefox to 3 frames per second; giving every draw a small index buffer of its own fixed it. The opposite fix, writing vertex data piece by piece into one large buffer, helped no browser and made phones stall, because mobile GPU drivers wait or copy when a buffer the GPU may still be reading is modified.
+The game also builds vertex conversion routines in RAM. `scripts/precompile_dynamic.py` runs the translated builders during the build, generates 960 format combinations for each of the two converters and compiles their 1,914 unique routines ahead of time. This extra pass is selected by the tested executable's SHA-256; it is specific to that version of the game.
 
-The PSP keeps its stencil buffer in the framebuffer's alpha channel, and God of War uses it for projected shadows and to limit a blur pass. Mirroring stencil and alpha into each other with full-screen passes was correct but cost 60 million extra pixels per frame at 4×. Tracking which rectangles, which stencil bits and which constant values actually changed brought that down to about 7 million.
+**System fonts.** Games importing `sceLibFont` can use original PGF fonts through `profile/host/font.cpp`. The build converts their glyph metrics and pixels into a cache, bundles it with the executable and synchronizes glyph texture writes with the GE worker. Call of Duty's bundled firmware updater supplies the Japanese and Latin fonts used here.
 
-Finally, God of War queues each frame's display list and keeps working on the next frame before it waits. Running the GE on its own thread turned the cost of a busy fight from game plus graphics, around 17 ms in Firefox, into the larger of the two, around 10 ms.
+**Controls.** Blocking controller reads wait for a fresh sample instead of returning the same button state repeatedly within one frame. The browser clears held keys when it loses focus and supports standard gamepad triggers. Call of Duty defaults to the FPS layout: WASD moves, I/J/K/L looks, V fires, Q aims, R reloads, E interacts, C crouches, Space jumps, 1 switches weapons and Esc pauses. Enter or Z accepts menus, X goes back and arrows navigate. On a gamepad, the left stick moves, the right stick maps to the PSP face buttons for aiming, and the triggers aim and fire. The control selector also offers the original PSP bindings.
 
-## A second game
-
-Ghost of Sparta went from a ZIP to a page through `port.sh` without changes to the scripts or the recompiler, and then waited forever at boot. It opens a 176-byte file with the PSP's DRM flag, hands its key to `sceIoIoctl` and checks what it reads back. The file is in PGD, the format amctrl.prx decrypts with the KIRK crypto engine, and for disc games that comes down to AES-128 with three keys from KIRK's key vault: a CMAC-based check of the header and a counter mode for the data. `profile/host/pgd.cpp` implements it.
-
-The next problem was a white sky, and the menus had the same white haze. Bisecting the draws of one frame led to a cloud layer drawn with lighting on, whose opacity comes from the alpha of the global ambient light, a factor the lighting code had left out. Performance needed no work: a frame costs 6 to 8 ms, as in Chains of Olympus.
+Regression tests cover controller sampling and release, thread scheduling, graphics callbacks and barriers, interrupt masking, font metrics and pixels, RAM vertex converters and VFPU packing. [docs/internals.md](docs/internals.md) has the test commands and debugging tools. Movies are still skipped, and the savedata additions currently cover storage size queries rather than persistent save/load.
 
 ## Port a game of your own
 
-You need git, CMake, Ninja, a C++20 compiler and Python 3. Everything has been run on Linux; macOS should be able to build the browser version but is untested, and the native test runner needs EGL and OpenGL ES headers (`libegl-dev` and `libgles-dev` on Debian and Ubuntu). Expect about 2 GB of disk space per game for the extracted disc, the generated code and the builds.
+Use a PSP disc image: an ISO, a ZIP containing an ISO, or an extracted disc folder containing `PSP_GAME`. You need git, CMake, Ninja, a C++20 compiler, Python 3 and make. The setup script installs the Emscripten SDK and builds PSPRecomp with this version's patches. Allow several gigabytes for the SDK, extracted disc, generated code and build files.
+
+On macOS, install the Xcode command-line tools and, with Homebrew available, the build dependencies:
 
 ```bash
-git clone https://github.com/snuri00/psp-web-recomp.git
-cd psp-web-recomp
-scripts/setup.sh                                   # PSPRecomp, the patches and the Emscripten SDK
-
-PSP_DECRYPT=/path/to/decrypter scripts/port.sh mygame "My Game.iso"
-scripts/serve.sh mygame                            # http://localhost:8613/
+xcode-select --install
+brew install git cmake ninja python openssl@3
 ```
 
-`port.sh` extracts the disc (an ISO, a ZIP containing one, or an already extracted folder), decrypts `PSP_GAME/SYSDIR/EBOOT.BIN`, translates it to C++, writes the manifest for streaming the rest of the disc and builds the page. It takes a few minutes; God of War goes from ZIP to playable page in about four on an 8-core laptop. Add `--native` to also build a headless runner that can dump frames to images and record audio, which is the quickest way to see how far a new game gets.
+On Debian or Ubuntu:
 
-Executables on retail discs are encrypted. `PSP_DECRYPT` names any tool that is called as `tool <in> <out>` and writes a plain ELF, such as DecEboot or pspdecrypt. PPSSPP can also dump a decrypted executable while it runs a game (Settings, Tools, Developer tools).
+```bash
+sudo apt update
+sudo apt install git cmake ninja-build g++ python3 make libssl-dev
+```
 
-Set your expectations accordingly: two games have been brought up so far, and both are Ready at Dawn titles built on the same engine, so they say little about how far a game from another studio gets. Another game will most likely stop at a system call nobody implemented yet, which is logged as `[hle] unimplemented ...`, or use a GE feature this renderer does not handle. [docs/internals.md](docs/internals.md) describes the tools for finding out what is missing, and the code is organized so that adding a call is a few lines.
+Clone [this fork](https://github.com/3Samourai/psp-web-recomp-call-of), then prepare the tools:
+
+```bash
+git clone https://github.com/3Samourai/psp-web-recomp-call-of.git
+cd psp-web-recomp-call-of
+scripts/setup.sh
+```
+
+**Decryption and fonts.** [John-K/pspdecrypt](https://github.com/John-K/pspdecrypt) can decrypt PSP executables and extract the firmware updater bundled with a disc. Call of Duty needs it for the system fonts. The following revision was used for this build:
+
+```bash
+git clone https://github.com/John-K/pspdecrypt.git tools/pspdecrypt
+git -C tools/pspdecrypt checkout c156627db7634d395c380c0a9589130f603307fc
+```
+
+Build it on macOS using the Homebrew OpenSSL path:
+
+```bash
+openssl_prefix="$(brew --prefix openssl@3)"
+make -C tools/pspdecrypt -j4 \
+  CFLAGS="-O2 -I$openssl_prefix/include" \
+  CXXFLAGS="-O2 -I$openssl_prefix/include" \
+  EXTRA_FLAG="-L$openssl_prefix/lib"
+```
+
+On Debian or Ubuntu, the installed `libssl-dev` supplies the headers and libraries:
+
+```bash
+make -C tools/pspdecrypt -j4
+```
+
+**Build and run.** Pick a short folder name for the game and use the same name in both commands. Replace the ISO path with your own file:
+
+```bash
+scripts/port.sh mygame "/path/to/My Game.iso"
+scripts/serve.sh mygame
+```
+
+Open [http://localhost:8613/](http://localhost:8613/) in a browser with WebGL2 support. Keep the server running while playing; Ctrl+C stops it. To use another port, run `scripts/serve.sh mygame 8614` and open `http://localhost:8614/`.
+
+`port.sh` extracts the disc into `games/<name>/root/disc`, prepares the executable, translates its MIPS code into `profile/generated/<name>`, writes a streaming manifest, prepares any required system fonts and builds the page in `build/web-<name>/profiles/web/`. Running it again reuses the extracted disc and executable. Use a different folder name when building a different ROM or version. `--opt 1` is the default optimization level for generated code.
+
+Some discs contain a plain ELF in `PSP_GAME/SYSDIR/BOOT.BIN`. The script uses that file automatically when no executable decrypter is configured. Call of Duty: Roads to Victory (USA) includes one, so its complete build uses:
+
+```bash
+scripts/port.sh cod-roads-to-victory "/path/to/Call of Duty - Roads to Victory (USA).iso"
+scripts/serve.sh cod-roads-to-victory
+```
+
+For an encrypted executable without a plain `BOOT.BIN`, `PSP_DECRYPT` must name a tool accepting `tool <input> <output>`. John-K's utility instead takes an `-o` option, so create a small adapter once:
+
+```bash
+cat > tools/decrypt-eboot <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+tool_dir="$(cd "$(dirname "$0")" && pwd)"
+exec "$tool_dir/pspdecrypt/pspdecrypt" -o "$2" "$1"
+SH
+chmod +x tools/decrypt-eboot
+
+PSP_DECRYPT="$PWD/tools/decrypt-eboot" scripts/port.sh mygame "/path/to/My Game.iso"
+scripts/serve.sh mygame
+```
+
+An executable that is already a plain ELF is copied directly. A decrypted executable dumped with PPSSPP can also be placed at `games/<name>/root/EBOOT.BIN` before running `port.sh`.
+
+If the game imports `sceLibFont`, the font step uses `tools/pspdecrypt/pspdecrypt` to extract `PSP_GAME/SYSDIR/UPDATE/DATA.BIN` automatically. `PSP_PSAR_DECRYPT` can point to that utility elsewhere. If the disc has no bundled updater, point `PSP_FONT_DIR` at an original `flash0/font` folder with supported revision-2 PGF fonts:
+
+```bash
+PSP_FONT_DIR="/path/to/flash0/font" scripts/port.sh mygame "/path/to/My Game.iso"
+```
+
+For the optional headless native runner on Debian or Ubuntu, install `libegl-dev` and `libgles-dev`, then add `--native` to `port.sh`. It can dump rendered frames and record audio. The browser build does not need those native graphics libraries.
+
+Other titles may need additional system calls or graphics features. The page log identifies missing calls as `[hle] unimplemented ...`, and the stopped status identifies execution failures. [docs/internals.md](docs/internals.md) explains how to inspect the guest threads, generated code and draws when bringing up another game.
 
 ## Hosting
 
@@ -77,9 +139,11 @@ Browsers that cannot draw WebGL2 on an OffscreenCanvas fall back to a single thr
 
 ## Legal
 
-This repository contains only original code, the PSPRecomp patches and third-party code under its own license. It contains no game code or data. The generated C++ and the built WebAssembly are translations of the game's executable, so they belong to the game's owners: keep them on your own machine and do not publish them. Use disc images of games you own. God of War is a trademark of Sony Interactive Entertainment; this project is not affiliated with or endorsed by Sony or any game publisher.
+This repository contains only original code, the PSPRecomp patches and third-party code under its own license. It contains no game code or data. The generated C++ and the built WebAssembly are translations of the game's executable, so they belong to the game's owners: keep them on your own machine and do not publish them. Use disc images of games you own. This project is not affiliated with or endorsed by any game publisher.
 
 ## Credits
+
+The original [PSP Web Recomp](https://github.com/snuri00/psp-web-recomp) by Samir Nuri (snuri00) provides the web profile, PSP kernel, WebGL2 renderer, audio integration and base build pipeline. This version extends that work with the Call of Duty bring-up and fixes described above.
 
 PSPRecomp by its contributors (MIT) does the static recompilation. PPSSPP and JPCSP documented much of the hardware behavior emulated here, and PPSSPP's standalone copy of FFmpeg's ATRAC3/ATRAC3+ decoder is used for music and speech (LGPL 2.1 or later, in `profile/third_party/at3_standalone`). Emscripten builds the WebAssembly.
 

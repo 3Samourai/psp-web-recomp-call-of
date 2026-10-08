@@ -36,7 +36,8 @@ public:
     [[nodiscard]] bool threaded() const noexcept { return threaded_; }
 
     // Guest side.
-    std::uint32_t enqueue(std::uint32_t list, std::uint32_t stall);
+    std::uint32_t enqueue(std::uint32_t list, std::uint32_t stall,
+                          std::function<void(std::uint32_t)> on_finish = {});
     void update_stall(std::uint32_t id, std::uint32_t stall);
     // True once list `id` (0: every list queued so far) has finished.
     [[nodiscard]] bool done(std::uint32_t id) const noexcept;

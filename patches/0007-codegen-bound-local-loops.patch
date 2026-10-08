@@ -1,0 +1,69 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Local PSP Web Recomp <local@localhost>
+Date: Wed, 7 Oct 2026 21:40:00 +0200
+Subject: [PATCH] codegen: bound same-unit backward branches and jumps
+
+Local guest loops previously stayed inside one generated function forever.
+Return to the outer dispatcher after 2048 local transfers so the scheduler
+heartbeat can run. Execute the delay slot before yielding and resume at the
+branch target, preserving register state.
+
+---
+diff --git a/tools/codegen_main.cpp b/tools/codegen_main.cpp
+index 2db2205..6e607a9 100644
+--- a/tools/codegen_main.cpp
++++ b/tools/codegen_main.cpp
+@@ -930,8 +936,15 @@ void emit_target(std::ostringstream &body, std::uint32_t target,
+                  std::uint32_t executable_base = 0u,
+                  std::uint32_t unit_span_bytes = 0u,
+                  const std::map<std::uint32_t, std::uint16_t> *direct_entry_ids = nullptr,
+-                 const std::set<std::uint32_t> *import_stubs = nullptr) {
++                 const std::set<std::uint32_t> *import_stubs = nullptr,
++                 std::uint32_t origin = 0u) {
+     if (labels.contains(target)) {
++        // A tight local loop must hand control back to the runtime periodically
++        // so its heartbeat can yield to the browser and advance guest time.
++        if (target <= origin) {
++            body << indent << "if (++local_transfers >= 2048u) { ctx.pc = "
++                 << psprecomp::hex32(target) << "u; return; }\n";
++        }
+         body << indent << "goto L_" << psprecomp::hex32(target).substr(2) << ";\n";
+         return;
+     }
+@@ -1094,16 +1107,16 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
+                     if (likely_branch) {
+                         body << "    if (" << condition << ") {\n"
+                              << emit_regular(slot, pc + 4u);
+-                        emit_target(body, target, function.entry_labels, "        ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
++                        emit_target(body, target, function.entry_labels, "        ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                         body << "    }\n";
+-                        emit_target(body, fallthrough, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
++                        emit_target(body, fallthrough, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                     } else {
+                         body << "    { const bool branch_taken = " << condition << ";\n"
+                              << emit_regular(slot, pc + 4u)
+                              << "      if (branch_taken) {\n";
+-                        emit_target(body, target, function.entry_labels, "          ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
++                        emit_target(body, target, function.entry_labels, "          ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                         body << "      }\n";
+-                        emit_target(body, fallthrough, function.entry_labels, "      ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
++                        emit_target(body, fallthrough, function.entry_labels, "      ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                         body << "    }\n";
+                     }
+                 } else if (decoded.kind == psprecomp::OpcodeKind::J ||
+@@ -1114,13 +1127,13 @@ std::string emit_function_source(const GeneratedFunctionInput &function,
+                     }
+                     body << emit_regular(slot, pc + 4u);
+                     if (decoded.kind == psprecomp::OpcodeKind::J) {
+-                        emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs);
++                        emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                     } else if (function.entry_labels.contains(target)) {
+                         // Fixed same-unit JAL: the destination is already a C++
+                         // label. Going through ctx.pc + LOCAL_DISPATCH needlessly
+                         // re-decodes a dense entry id and burns the local-transfer
+                         // counter. The delay slot and $ra write have already run.
+-                        body << "    goto L_" << psprecomp::hex32(target).substr(2) << ";\n";
++                        emit_target(body, target, function.entry_labels, "    ", function.executable_base, function.unit_span_bytes, function.direct_entry_ids, function.import_stubs, pc);
+                     } else {
+                         // Cross-unit call. PSP import stubs are deliberate outer-
+                         // dispatcher boundaries; do not pay a guaranteed-failing
